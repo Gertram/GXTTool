@@ -36,9 +36,12 @@ namespace IndexedGTX
             if (args.Length == 0)
             {
                 //args = new string[] { "-linear","-grey",@"ID00013.png" };
-                args = new string[] { @"-linear", "-grey", "-ext", @"D:\Common\Oregairu\vita_zoku\system\font" };
-                //args = new string[] { @"ID00030.png" };
-                //args = new string[] { @"ID00030.gxt" };
+                //args = new string[] { @"-linear", "-grey", "-ext", @"D:\Common\Oregairu\vita_zoku\system\font" };
+                //args = new string[] { @"ID00651_.png" };
+                //args = new string[] { "-dxt", @"D:\Common\Oregairu\vita\work\system\dxt\gxt" };
+                //args = new string[] { @"C:\Work\Oregairu\vita\original\system\ID00019" };
+                args = new string[] { @"C:\Work\Oregairu\vita_zoku\bgfull\BG01A.gxt" };
+                //args = new string[] { @"ID00200" };
             }
             var tasks = new List<Task>();
             foreach (var arg in args)
@@ -137,21 +140,21 @@ namespace IndexedGTX
                     }
                     ConvertGreyScalePNG(reader.BaseStream, pngFile, output);
                 }
+                else if(GXTFormat == GXTFormat.DXT)
+                {
+                    ConvertDXT(reader.BaseStream, pngFile, Path.ChangeExtension(filename, ""));
+                }
                 else
                 {
                     throw new NotImplementedException();
                 }
-                //else// if(GXTFormat == GXTFormat.DXT)
-                //{
-                //    ConvertPNG(reader.BaseStream, pngFile, Path.ChangeExtension(filename, ""));
-                //}
             }
             else
             {
                 throw new NotImplementedException();
             }
         }
-        private static void ConvertPNG(Stream stream,PngReader pngFile,string output)
+        private static void ConvertDXT(Stream stream,PngReader pngFile,string output)
         {
             var info = pngFile.ImgInfo;
             ushort width = (ushort)info.Cols;
@@ -167,14 +170,16 @@ namespace IndexedGTX
             writer.Write(0x00000000);
             writer.Write(0x00000000);
             writer.Write(0x00000000);
-            writer.Write(0x00000000);
+            //
+            writer.Write(0x00000040);
             //Texture Length
             //writer.Write(0x00002000);
             writer.Write(width * height);
             writer.Write(0xFFFFFFFF);
             writer.Write(0x00000000);
+
             writer.Write(0x00000000);
-            //p8 texture format (indexed 8bpp)
+            //
             writer.Write(0x87000000);
             //Texture Width(0x800) and Height(0x400)
             writer.Write(width);
@@ -187,6 +192,14 @@ namespace IndexedGTX
             for(int i = 0,start = 0;i < height; i++,start += byteLine)
             {
                 pngFile.ReadRowByte(row, i);
+                for(int j = 0;j < width; j++)
+                {
+                    var temp = row[j * 4];
+                    row[j*4]= row[j * 4 + 1];
+                    row[j * 4+1] = row[j * 4 + 2];
+                    row[j * 4+2] = row[j * 4 + 3];
+                    row[j * 4+3] = temp;
+                }
                 Buffer.BlockCopy(row,0,data, start, byteLine);
             }
             data = PostProcessing.SwizzleTexturePSV(data, width, height, PixelFormat.Format32bppArgb);
@@ -337,7 +350,7 @@ namespace IndexedGTX
             var high = reader.ReadByte();
             return (ushort)(low | (high << 8));
         }
-        private static void ConvertIndexedGXT(BinaryReader reader,int width,int height,string output)
+        private static void ConvertIndexedGXT(BinaryReader reader,int width,int height,uint swizled,string output,byte colororder)
         {
             var info = new ImageInfo(width, height, 8, false, false, true);
 
@@ -350,15 +363,32 @@ namespace IndexedGTX
             chunk.SetNentries(256);
             var tchunk = new PngChunkTRNS(info);
             var alpha = new int[256];
-            for (var i = 0; i < 256; i++)
+            byte r,g,b,a;
+            if (colororder == 1)
             {
-                var b = reader.ReadByte();
-                var g = reader.ReadByte();
-                var r = reader.ReadByte();
-                var a = reader.ReadByte();
+                for (var i = 0; i < 256; i++)
+                {
+                    b = reader.ReadByte();
+                    g = reader.ReadByte();
+                    r = reader.ReadByte();
+                    a = reader.ReadByte();
 
-                alpha[i] = a;
-                chunk.SetEntry(i, r, g, b);
+                    alpha[i] = a;
+                    chunk.SetEntry(i, r, g, b);
+                }
+            }
+            else
+            {
+                for (var i = 0; i < 256; i++)
+                {
+                    r = reader.ReadByte();
+                    g = reader.ReadByte();
+                    b = reader.ReadByte();
+                    a = reader.ReadByte();
+
+                    alpha[i] = a;
+                    chunk.SetEntry(i, r, g, b);
+                }
             }
             tchunk.SetPalletteAlpha(alpha);
 
@@ -367,7 +397,11 @@ namespace IndexedGTX
             pngFile.CompLevel = 9;
             reader.BaseStream.Position = 0x40;
             var data = reader.ReadBytes(width * height);
-            data = PostProcessing.UnswizzleTexturePSV(data, width, height, PixelFormat.Format8bppIndexed);
+            
+            if(swizled == 0x00000000)
+            {
+                data = PostProcessing.UnswizzleTexturePSV(data, width, height, PixelFormat.Format8bppIndexed);
+            }
             var row = new byte[width];
             for (int i = 0, start = 0; i < height; i++, start += width)
             {
@@ -376,7 +410,7 @@ namespace IndexedGTX
             }
             pngFile.End();
         }
-        private static void ConvertUBC3(BinaryReader reader,int width,int height,string output)
+        private static void ConvertUBC(BinaryReader reader,int width,int height, uint swizled, string output, SceGxmTextureBaseFormat dxt = SceGxmTextureBaseFormat.UBC3)
         {
 
             //var info = new ImageInfo(width, height, 8, true);
@@ -386,7 +420,7 @@ namespace IndexedGTX
 
             //pngFile.CompLevel = 9;
             reader.BaseStream.Position = 0x40;
-            var PixelData = DXTx.Decompress(reader, width * height, width, height, SceGxmTextureBaseFormat.UBC3);
+            var PixelData = DXTx.Decompress(reader, width * height, width, height, dxt);
             //var temp = File.ReadAllBytes("temp.dat");
             //for (int i = 0; i < PixelData.Length; i++)
             //{
@@ -395,7 +429,15 @@ namespace IndexedGTX
 
             //    }
             //}
+
+
+            //if (swizled == 0x60000000)
+            //{
+            //    PixelData = PostProcessing.UnswizzleTexturePSV(PixelData, width, height, PixelFormat.Format32bppArgb);
+            //}
             PixelData = PostProcessing.UnswizzleTexturePSV(PixelData, width, height, PixelFormat.Format32bppArgb);
+
+
             //width *= 4;
             //var row = new byte[width];
             //for (int i = 0, start = 0; i < height; i++, start += width)
@@ -446,7 +488,56 @@ namespace IndexedGTX
 
             realTexture.Save(output);
         }
-        private static void ConvertDirect(BinaryReader reader,int width,int height,string output)
+        private static void ConvertARGB8888(BinaryReader reader,int width,int height, uint swizled, string output)
+        {
+            reader.BaseStream.Position = 0x40;
+            var PixelData = reader.ReadBytes(4 * width * height);
+
+            //if (swizled == 0x60000000)
+            //{
+            //    PixelData = PostProcessing.UnswizzleTexturePSV(PixelData, width, height, PixelFormat.Format32bppArgb);
+            //}
+            Bitmap texture = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            BitmapData bmpData = texture.LockBits(new Rectangle(0, 0, texture.Width, texture.Height), ImageLockMode.ReadWrite, texture.PixelFormat);
+
+            byte[] pixelsForBmp = new byte[bmpData.Height * bmpData.Stride];
+            int bitsPerPixel = Bitmap.GetPixelFormatSize(texture.PixelFormat);
+
+            // TODO, taken from Scarlet: verify input stride/line size & copy length logic; *seems* to work okay now...?
+            bool isCompressed = true;
+            int lineSize, copySize;
+
+            if ((bmpData.Width % 8) == 0 || isCompressed)
+                lineSize = (bmpData.Width / (bitsPerPixel < 8 ? 2 : 1)) * (bitsPerPixel < 8 ? 1 : bitsPerPixel / 8);
+            else
+                lineSize = (PixelData.Length / bmpData.Height);
+
+            if (texture.PixelFormat == System.Drawing.Imaging.PixelFormat.Format4bppIndexed)
+                copySize = bmpData.Width / 2;
+            else
+                copySize = (bmpData.Width / (bitsPerPixel < 8 ? 2 : 1)) * (bitsPerPixel < 8 ? 1 : bitsPerPixel / 8);
+
+            for (int y = 0; y < bmpData.Height; y++)
+            {
+                int srcOffset = y * lineSize;
+                int dstOffset = y * bmpData.Stride;
+                if (srcOffset >= PixelData.Length || dstOffset >= pixelsForBmp.Length) continue;
+                Buffer.BlockCopy(PixelData, srcOffset, pixelsForBmp, dstOffset, copySize);
+            }
+
+            Marshal.Copy(pixelsForBmp, 0, bmpData.Scan0, pixelsForBmp.Length);
+            texture.UnlockBits(bmpData);
+
+
+            Bitmap realTexture = new Bitmap(width, height);
+            using (Graphics g = Graphics.FromImage(realTexture))
+            {
+                g.DrawImageUnscaled(texture, 0, 0);
+            }
+
+            realTexture.Save(output);
+        }
+        private static void ConvertDirect(BinaryReader reader,int width,int height, uint swizled, string output)
         {
             reader.BaseStream.Position = 0x40;
 
@@ -464,9 +555,66 @@ namespace IndexedGTX
 
             pngFile.End();
         }
+        private static void Convert8bpp(BinaryReader reader,int width,int height, uint swizled, string output)
+        {
+            var info = new ImageInfo(width, height, 8, false, false, true);
+
+            using var writer = File.OpenWrite(output);
+            reader.BaseStream.Position = 0x40 + width * height;
+            var pngFile = new PngWriter(writer, info);
+
+            var chunk = new PngChunkPLTE(info);
+            reader.BaseStream.Position = 0x40 + width * height;
+            chunk.SetNentries(256);
+            var tchunk = new PngChunkTRNS(info);
+            var alpha = new int[256];
+            for (var i = 0; i < 256; i++)
+            {
+                ////BGRA2222
+                //var b = i & 0b11000000;
+                //var g = i & 0b00110000;
+                //var r = i & 0b00001100;
+                //var a = i & 0b00000011;
+
+                ////Grayscale 44
+                //var b = i & 0b11110000;
+                //var r = i & 0b11110000;
+                //var g = i & 0b11110000;
+                //var a = i & 0b00001111;
+
+                //grayscale 44
+                var b = i;
+                var r = i;
+                var g = i;
+                var a = i;
+
+                alpha[i] = a;
+                chunk.SetEntry(i, r, g, b);
+            }
+            tchunk.SetPalletteAlpha(alpha);
+
+            pngFile.GetChunksList().Queue(chunk);
+            pngFile.GetChunksList().Queue(tchunk);
+            pngFile.CompLevel = 9;
+            reader.BaseStream.Position = 0x40;
+            var data = reader.ReadBytes(width * height);
+
+            if (swizled == 0x00000000)
+            {
+                data = PostProcessing.UnswizzleTexturePSV(data, width, height, PixelFormat.Format8bppIndexed);
+            }
+            var row = new byte[width];
+            for (int i = 0, start = 0; i < height; i++, start += width)
+            {
+                Array.Copy(data, start, row, 0, width);
+                pngFile.WriteRowByte(row, i);
+            }
+            pngFile.End();
+        }
         private static void ConvertGXT(BinaryReader reader,string output)
         {
-            reader.BaseStream.Position = 0x34;
+            reader.BaseStream.Position = 0x30;
+            var swizled = reader.ReadUInt32();
             var format = reader.ReadUInt32();
 
             var width = ReadUint16(reader);
@@ -476,15 +624,31 @@ namespace IndexedGTX
 
             if(format == 0x95001000)
             {
-                ConvertIndexedGXT(reader, width, height, output);
+                ConvertIndexedGXT(reader, width, height, swizled, output,1);
+            }
+            else if(format == 0x95000000)
+            {
+                ConvertIndexedGXT(reader, width, height, swizled, output,0);
+            }
+            else if(format == 0x0c001000)
+            {
+                ConvertARGB8888(reader, width, height, swizled, output);
+            }
+            else if(format == 0x86000000)
+            {
+                ConvertUBC(reader, width, height, swizled,output, SceGxmTextureBaseFormat.UBC2);
             }
             else if(format == 0x87000000)
             {
-                ConvertUBC3(reader, width, height,output);
+                ConvertUBC(reader, width, height, swizled,output, SceGxmTextureBaseFormat.UBC3);
             }
             else if(format == 0x00007000)
             {
-                ConvertDirect(reader, width, height, output);
+                ConvertDirect(reader, width, height, swizled, output);
+            }
+            else if (format == 0x00005000)
+            {
+                ConvertDirect(reader, width, height, swizled, output);
             }
         }
     }
